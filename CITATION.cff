@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use kmerOpt, please cite the following."
+authors:
+  - family-names: "[Author]"
+    given-names: "Shifan"
+title: "kmerOpt: K-mer selection with quantitative genetics for GWAS"
+version: 0.1.0
+date-released: 2026-08-03
+url: "https://github.com/username/kmerOpt"

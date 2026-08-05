@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kmerOpt"
+version = "0.2.0"
+description = "K-mer selection, annotation, and interpretation for GWAS"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Shifan"}]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.21",
+    "pandas>=1.3",
+    "scipy>=1.7",
+    "scikit-learn>=1.0",
+    "matplotlib>=3.5",
+]
+keywords = ["k-mer", "GWAS", "heritability", "LD pruning", "annotation", "genomics", "plant breeding"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+kmeropt = "kmerOpt.cli:main"
+
+[project.urls]
+Repository = "https://github.com/username/kmerOpt"
+
+[tool.setuptools.packages.find]
+include = ["kmerOpt*"]
