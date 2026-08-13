@@ -6,6 +6,9 @@ import re, os, sys
 from typing import Optional, List, Dict, Tuple
 from collections import Counter
 
+from .mapping import (load_genome as _load_genome_fasta,
+                      build_kmer_index, reverse_complement, _norm_chr)
+
 
 class KmerAnnotator:
     """Annotate significant k-mers from GWAS with biological context.
@@ -54,19 +57,8 @@ class KmerAnnotator:
         -------
         dict of {chromosome_name: sequence}
         """
-        chroms = {}
-        current = None; seq = []
-        with open(self.genome_fasta) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('>'):
-                    if current: chroms[current] = ''.join(seq)
-                    current = line[1:].split()[0]; seq = []
-                else:
-                    seq.append(line)
-            if current: chroms[current] = ''.join(seq)
-        self._genome = chroms
-        return chroms
+        self._genome = _load_genome_fasta(self.genome_fasta)
+        return self._genome
 
     def load_genes(self, feature_type: str = 'gene') -> pd.DataFrame:
         """Parse GFF annotation."""
@@ -86,7 +78,8 @@ class KmerAnnotator:
                     'chr': parts[0], 'start': int(parts[3]), 'end': int(parts[4]),
                     'strand': parts[6], 'gene_id': gid.group(1) if gid else '',
                     'gene_name': gname.group(1) if gname else '',
-                    'source': src.group(1) if src else ''
+                    'source': src.group(1) if src else '',
+                    'chr_norm': _norm_chr(parts[0]),
                 })
         self._genes = pd.DataFrame(genes)
         return self._genes
@@ -110,6 +103,11 @@ class KmerAnnotator:
     def map_kmers(self, window_bp: int = 50000, n_jobs: int = 1) -> pd.DataFrame:
         """Map ALL k-mers to genome and annotate with overlapping genes.
 
+        Uses a single-pass inverted index (see ``mapping.build_kmer_index``)
+        so the genome is scanned once for the whole query set. A k-mer not
+        found on the forward strand is re-checked on its reverse complement
+        before being classified as PAV.
+
         Returns
         -------
         pd.DataFrame with columns: kmer, p_value, chr, pos, variant_type, genes
@@ -119,35 +117,39 @@ class KmerAnnotator:
         if self._genes is None and self.gff_path:
             self.load_genes()
 
+        # Index both strands so a k-mer reported on the reverse strand still
+        # resolves (its reverse complement is what appears in the reference).
+        seqs = set()
+        for km, _ in self.kmer_list:
+            seqs.add(km.upper())
+            seqs.add(reverse_complement(km).upper())
+        index = build_kmer_index(self._genome, seqs)
+
         hits = []
         for kmer, pval in self.kmer_list:
             hit = {'kmer': kmer, 'p_value': pval, 'chr': '', 'pos': 0,
                    'variant_type': 'PAV', 'genes': [], 'n_copies': 0}
-            found = False
-            for chr_name, chr_seq in self._genome.items():
-                # Find ALL occurrences (CNV detection)
-                positions = []
-                start = 0
-                while True:
-                    pos = chr_seq.find(kmer, start)
-                    if pos == -1: break
-                    positions.append(pos + 1)
-                    start = pos + 1
-                if positions:
-                    found = True
-                    hit['chr'] = chr_name
-                    hit['pos'] = positions[0]
-                    hit['n_copies'] = len(positions)
-                    hit['variant_type'] = self._classify_variant(kmer, positions, chr_name)
+            positions = index.get(kmer.upper(), [])
+            if not positions:
+                # k-mer may be stored on the reverse strand; before declaring
+                # it absent (PAV), check its reverse complement.
+                positions = index.get(reverse_complement(kmer).upper(), [])
 
-                    if self._genes is not None:
-                        nearby = self._genes[
-                            (self._genes['chr'] == chr_name) &
-                            (self._genes['start'] <= positions[0] + window_bp) &
-                            (self._genes['end'] >= positions[0] - window_bp)
-                        ]
-                        hit['genes'] = nearby['gene_id'].tolist() if len(nearby) > 0 else []
-                    break
+            if positions:
+                chrom = positions[0][0]
+                pos = positions[0][1]
+                hit['chr'] = chrom
+                hit['pos'] = pos
+                hit['n_copies'] = len(positions)
+                hit['variant_type'] = self._classify_variant(kmer, len(positions))
+
+                if self._genes is not None:
+                    nearby = self._genes[
+                        (self._genes['chr_norm'] == _norm_chr(chrom)) &
+                        (self._genes['start'] <= pos + window_bp) &
+                        (self._genes['end'] >= pos - window_bp)
+                    ]
+                    hit['genes'] = nearby['gene_id'].tolist() if len(nearby) > 0 else []
             hits.append(hit)
 
         # Summarize variant distribution
@@ -163,22 +165,21 @@ class KmerAnnotator:
         self.hits_ = pd.DataFrame(hits)
         return self.hits_
 
-    def _classify_variant(self, kmer: str, positions: List[int],
-                           chr_name: str) -> str:
-        """Classify k-mer as SNP, SV, PAV, or CNV based on mapping pattern.
+    def _classify_variant(self, kmer: str, n_copies: int) -> str:
+        """Classify a k-mer's mapping pattern by copy number.
 
-        Heuristics:
-        - position == -1 → PAV (present/absent across references, not found here)
-        - n_copies == 1 → likely SNP or small indel (single hit)
-        - n_copies > 1 → CNV (multiple copies in same genome)
-        - If multiple nearby k-mers cluster → possible SV breakpoint
+        Heuristics (copy-number based; sequence identity is NOT checked):
+        - n_copies == 0 → PAV (absent from the reference → presence/absence)
+        - n_copies == 1 → unique_mapping (a single exact hit; may tag a SNP or
+          small indel, but a unique hit alone does NOT prove a point mutation —
+          confirming a SNP requires a mismatch-aware alignment)
+        - 2-5 copies → CNV_low_copy; >5 copies → CNV_high_copy
         """
-        n = len(positions)
-        if n == 0:
-            return 'PAV'  # not found = presence/absence variation
-        elif n == 1:
-            return 'SNP_or_indel'  # unique match → likely tags a point mutation
-        elif 2 <= n <= 5:
+        if n_copies == 0:
+            return 'PAV'
+        elif n_copies == 1:
+            return 'unique_mapping'
+        elif 2 <= n_copies <= 5:
             return 'CNV_low_copy'
         else:
             return 'CNV_high_copy'

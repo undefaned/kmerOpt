@@ -164,6 +164,18 @@ results/
 - **Dual correction**: Benjamini-Hochberg FDR + Modified Bonferroni (KMERIA-style)
 - **Mixed-ploidy support**: Per-sample ploidy vectors
 
+## New in v0.3.1
+
+- **Indexed k-mer mapping**: inverted index scans the genome once — O(L + N)
+  instead of O(L × N), so mapping thousands of significant k-mers is fast
+- **Strand-aware PAV**: a k-mer is checked on both strands before being
+  classified as absent (PAV)
+- **Honest variant labels**: single-hit k-mers are now reported as
+  `unique_mapping` (not "SNP"), since a unique match alone does not prove a
+  point mutation; copy-number classes are `CNV_low_copy` / `CNV_high_copy`
+- **Chromosome-name normalization**: `Chr1` vs `1` naming between FASTA and
+  GFF no longer breaks gene annotation
+
 ## Citation
 
 [Manuscript in preparation]

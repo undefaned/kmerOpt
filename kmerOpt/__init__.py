@@ -11,7 +11,7 @@ Core pipeline:
     4. ANOVA tertile validation
     5. Multiple testing correction (modified Bonferroni + FDR)
     6. K-mer → reference genome mapping
-    7. Variant classification (SNP / SV / PAV / CNV)
+    7. Variant classification (unique_mapping / CNV / PAV)
     8. Gene annotation + GO/KEGG enrichment
     9. Selection signal detection (Fst / PAV frequency / Tajima's D)
 
@@ -22,7 +22,7 @@ Reference:
     Chen & Liu et al. (2026) Nat Genet 58:1711-1721 (KMERIA)
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __author__ = "Shifan"
 
 # Normalization
