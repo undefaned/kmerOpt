@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kmerOpt"
-version = "0.2.0"
+version = "0.3.0"
 description = "K-mer selection, annotation, and interpretation for GWAS"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 authors = [{name = "Shifan"}]
 requires-python = ">=3.9"
 dependencies = [
@@ -29,7 +29,9 @@ classifiers = [
 kmeropt = "kmerOpt.cli:main"
 
 [project.urls]
-Repository = "https://github.com/username/kmerOpt"
+Homepage = "https://github.com/undefaned/kmerOpt"
+Repository = "https://github.com/undefaned/kmerOpt"
+Issues = "https://github.com/undefaned/kmerOpt/issues"
 
 [tool.setuptools.packages.find]
 include = ["kmerOpt*"]

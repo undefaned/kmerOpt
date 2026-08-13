@@ -53,15 +53,15 @@ def anova_tertile(X: np.ndarray, y: np.ndarray,
         try:
             tertile = pd.qcut(kmer_vals, 3, labels=['low','mid','high'],
                               duplicates='drop')
-        except ValueError:
-            # All values identical
+            actual_labels = tertile.categories.tolist()
+        except (ValueError, IndexError):
             results.append({'kmer': kmer_ids[idx], 'p_value': 1.0,
                            'eta_squared': 0.0, 'f_statistic': 0.0,
                            'valid': False})
             continue
 
-        groups = [y[tertile == g] for g in tertile.categories]
-        if all(len(g) >= 3 for g in groups):
+        groups = [y[tertile == g] for g in actual_labels]
+        if len(groups) >= 2 and all(len(g) >= 3 for g in groups):
             f_stat, p_val = stats.f_oneway(*groups)
             grand_mean = y.mean()
             ss_between = sum(len(g) * (g.mean() - grand_mean)**2 for g in groups)

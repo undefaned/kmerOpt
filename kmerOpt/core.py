@@ -1,4 +1,8 @@
-"""Core module: KmerSelector — the main class for k-mer selection."""
+"""Core module: KmerSelector — the main class for k-mer selection.
+
+Supports ploidy-aware normalization (KMERIA-style) and multiple
+encoding strategies for diploid to polyploid GWAS.
+"""
 
 import numpy as np
 import pandas as pd
@@ -8,6 +12,9 @@ from scipy import stats
 from typing import Optional, Tuple, List, Dict
 import warnings
 warnings.filterwarnings("ignore")
+
+from .normalize import (ploidy_aware_normalize, quantile_dosage_encode,
+                         binary_encode, mixed_ploidy_normalize)
 
 
 class KmerSelector:
@@ -21,6 +28,14 @@ class KmerSelector:
         Phenotype values.
     kmer_ids : list of str, optional
         K-mer sequences or identifiers.
+    sequencing_depth : np.ndarray, optional
+        Per-sample sequencing depth for ploidy-aware normalization.
+    ploidy : np.ndarray or int, optional
+        Per-sample ploidy level. int for uniform ploidy.
+    encode : str
+        'standard' = StandardScaler (default, backward compatible).
+        'quantile' = 0-2 continuous dosage (KMERIA-style).
+        'binary' = 0/1 presence-absence (for pure lines).
 
     Attributes
     ----------
@@ -36,19 +51,35 @@ class KmerSelector:
         h² at optimal k-mer count.
     """
 
-    def __init__(self, X: np.ndarray, y: np.ndarray, kmer_ids: Optional[List[str]] = None):
-        self.X = np.asarray(X, dtype=np.float32)
+    def __init__(self, X: np.ndarray, y: np.ndarray,
+                 kmer_ids: Optional[List[str]] = None,
+                 sequencing_depth: Optional[np.ndarray] = None,
+                 ploidy: Optional[np.ndarray] = None,
+                 encode: str = 'standard'):
+        self.X_raw = np.asarray(X, dtype=np.float32)
         self.y = np.asarray(y, dtype=np.float32)
         self.kmer_ids = kmer_ids or [f"kmer_{i}" for i in range(X.shape[1])]
+        self.encode_method = encode
 
         # Validate
-        assert self.X.shape[0] == len(self.y), "X and y must have same n_samples"
-        assert self.X.ndim == 2, "X must be 2D"
+        assert self.X_raw.shape[0] == len(self.y), "X and y must have same n_samples"
+        assert self.X_raw.ndim == 2, "X must be 2D"
 
-        self.n_samples_ = self.X.shape[0]
-        self.n_kmers_ = self.X.shape[1]
+        self.n_samples_ = self.X_raw.shape[0]
+        self.n_kmers_ = self.X_raw.shape[1]
 
-        # Standardize
+        # Ploidy-aware normalization
+        if sequencing_depth is not None and ploidy is not None:
+            if isinstance(ploidy, (int, float)):
+                ploidy = np.full(self.n_samples_, ploidy, dtype=np.float64)
+            X_norm = mixed_ploidy_normalize(
+                self.X_raw, sequencing_depth, ploidy, encode=encode
+            )
+            self.X = X_norm
+        else:
+            self.X = self.X_raw
+
+        # Standardize for downstream analysis
         self._scaler_X = StandardScaler()
         self.Xs_ = self._scaler_X.fit_transform(self.X)
         self.ys_ = StandardScaler().fit_transform(self.y.reshape(-1,1)).ravel()
@@ -223,18 +254,22 @@ class KmerSelector:
         for idx in top_idx:
             kmer_vals = self.X[:, self.selected_indices_[idx]]
             # Tertile grouping
-            tertile = pd.qcut(kmer_vals, 3, labels=['low','mid','high'], duplicates='drop')
-            groups = [self.y[tertile == g] for g in ['low','mid','high']]
+            try:
+                tertile = pd.qcut(kmer_vals, 3, labels=['low','mid','high'], duplicates='drop')
+                # Adjust labels if duplicates were dropped
+                actual_labels = tertile.categories.tolist()
+                groups = [self.y[tertile == g] for g in actual_labels]
 
-            if all(len(g) >= 3 for g in groups):
-                f_stat, p_val = stats.f_oneway(*groups)
-                # Effect size (eta-squared)
-                grand_mean = self.y.mean()
-                ss_between = sum(len(g) * (g.mean() - grand_mean)**2 for g in groups)
-                ss_total = sum((self.y - grand_mean)**2)
-                eta_sq = ss_between / ss_total if ss_total > 0 else 0
-            else:
-                p_val, eta_sq = 1.0, 0.0
+                if len(groups) >= 2 and all(len(g) >= 3 for g in groups):
+                    f_stat, p_val = stats.f_oneway(*groups)
+                    grand_mean = self.y.mean()
+                    ss_between = sum(len(g) * (g.mean() - grand_mean)**2 for g in groups)
+                    ss_total = sum((self.y - grand_mean)**2)
+                    eta_sq = ss_between / ss_total if ss_total > 0 else 0
+                else:
+                    p_val, eta_sq, f_stat = 1.0, 0.0, 0.0
+            except (ValueError, IndexError):
+                p_val, eta_sq, f_stat = 1.0, 0.0, 0.0
 
             results.append({
                 'kmer': self.kmer_ids[self.selected_indices_[idx]],
